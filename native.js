@@ -99,7 +99,21 @@
     stopRinging() { if (isNative) safe(() => N.stopRinging(), null); },
     schedule,
     cancel,
-    vibrate(ms) { if (isNative) safe(() => N.vibrate(ms | 0), null); }
+    vibrate(ms) { if (isNative) safe(() => N.vibrate(ms | 0), null); },
+
+    /* Hands a URL to Android so Teams, Outlook or the browser can claim it.
+       Returns false when nothing on the phone can open it. */
+    openExternal(url) {
+      if (!isNative || !N.openExternal) return false;
+      return safe(() => N.openExternal(String(url)), false);
+    },
+
+    /* A WebView cannot save a file, so the .ics goes to Android and the
+       chooser offers Outlook and the calendar apps. */
+    shareCalendar(filename, text) {
+      if (!isNative || !N.shareCalendar) return false;
+      return safe(() => N.shareCalendar(String(filename), String(text)), false);
+    }
   };
 
   function safe(fn, fallback) {

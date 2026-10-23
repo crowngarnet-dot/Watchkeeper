@@ -267,6 +267,68 @@ public class MainActivity extends android.app.Activity {
             } catch (Exception ignored) { }
         }
 
+        /**
+         * Hands a link to Android. A Teams scheduling link opens the Teams
+         * app when it is installed, the browser otherwise.
+         */
+        @JavascriptInterface
+        public boolean openExternal(String url) {
+            if (url == null || url.length() == 0) return false;
+            try {
+                Intent i = new Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url));
+                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                startActivity(i);
+                return true;
+            } catch (Exception e) {
+                return false;
+            }
+        }
+
+        /**
+         * Writes the calendar entry to a file the chooser can hand to Outlook.
+         * A WebView has no download of its own, so this is the only route.
+         */
+        @JavascriptInterface
+        public boolean shareCalendar(String filename, String text) {
+            if (text == null) return false;
+            try {
+                java.io.File dir = new java.io.File(getCacheDir(), "share");
+                if (!dir.exists() && !dir.mkdirs()) return false;
+
+                String safe = (filename == null || filename.length() == 0)
+                        ? "reminder.ics" : filename.replaceAll("[^A-Za-z0-9._-]", "_");
+                java.io.File f = new java.io.File(dir, safe);
+
+                java.io.FileOutputStream out = new java.io.FileOutputStream(f);
+                try {
+                    out.write(text.getBytes("UTF-8"));
+                } finally {
+                    out.close();
+                }
+
+                android.net.Uri uri = androidx.core.content.FileProvider.getUriForFile(
+                        MainActivity.this, getPackageName() + ".files", f);
+
+                Intent view = new Intent(Intent.ACTION_VIEW);
+                view.setDataAndType(uri, "text/calendar");
+                view.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
+                        | Intent.FLAG_ACTIVITY_NEW_TASK);
+
+                Intent send = new Intent(Intent.ACTION_SEND);
+                send.setType("text/calendar");
+                send.putExtra(Intent.EXTRA_STREAM, uri);
+                send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+
+                Intent chooser = Intent.createChooser(view, "Add to calendar");
+                chooser.putExtra(Intent.EXTRA_INITIAL_INTENTS, new Intent[]{send});
+                chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                startActivity(chooser);
+                return true;
+            } catch (Exception e) {
+                return false;
+            }
+        }
+
         @JavascriptInterface
         public String version() {
             try {

@@ -192,6 +192,7 @@ main{
 }
 .sbtn:hover{border-color:var(--ink-3); color:var(--ink)}
 .sbtn.edit{background:var(--amber-soft); color:var(--amber); border-color:transparent}
+.sbtn.teams{background:#4b53bc; color:#fff; border-color:transparent}
 .sbtn.del{color:var(--red)}
 
 .empty{text-align:center; padding:44px 20px; color:var(--ink-3)}
@@ -445,12 +446,26 @@ main{
       </div>
     </div>
 
-    <div class="fld">
-      <label for="fPriority">Priority</label>
-      <select id="fPriority">
-        <option value="normal">Normal</option>
-        <option value="high">High</option>
-      </select>
+    <div class="grid2">
+      <div class="fld">
+        <label for="fPriority">Priority</label>
+        <select id="fPriority">
+          <option value="normal">Normal</option>
+          <option value="high">High</option>
+        </select>
+      </div>
+      <div class="fld">
+        <label for="fDuration">Length</label>
+        <select id="fDuration">
+          <option value="15">15 minutes</option>
+          <option value="30" selected>30 minutes</option>
+          <option value="45">45 minutes</option>
+          <option value="60">1 hour</option>
+          <option value="90">1.5 hours</option>
+          <option value="120">2 hours</option>
+          <option value="240">Half a day</option>
+        </select>
+      </div>
     </div>
 
     <div class="fld">
@@ -564,6 +579,7 @@ let saveBroken = false;
 let lastDeleted = null;
 let pendingDraft = null;      // draft awaiting confirmation
 let editingId = null;         // id being edited, or null for a new one
+let wantsTeams = false;       // the wording asked for a Teams meeting
 
 function load(){
   let raw = null;
@@ -721,7 +737,8 @@ function card(i, now){
       '<button class="sbtn" data-act="snooze" data-min="15">+15m</button>' +
       '<button class="sbtn" data-act="snooze" data-min="60">+1h</button>' +
       '<button class="sbtn" data-act="snooze" data-min="1440">+1d</button>' +
-      '<button class="sbtn" data-act="ics">Calendar</button>' +
+      '<button class="sbtn teams" data-act="teams">Teams</button>' +
+      '<button class="sbtn" data-act="ics">Outlook</button>' +
       '<button class="sbtn del" data-act="delete">Delete</button>' +
     '</div>' +
   '</article>';
@@ -822,6 +839,7 @@ listEl.addEventListener('click', e => {
   if(act === 'snooze'){ mutate(id, 'snooze', {minutes: parseInt(btn.dataset.min,10)});
     toast('Moved to ' + fmtWhen(items.find(x=>x.id===id))); return; }
   if(act === 'edit'){ openEditor(it); return; }
+  if(act === 'teams'){ openInTeams(it); return; }
   if(act === 'ics'){ exportICS([it]); return; }
   if(act === 'delete'){ mutate(id, 'delete'); return; }
 });
@@ -883,6 +901,7 @@ const F = {
   vessel: document.getElementById('fVessel'),
   ref:    document.getElementById('fRef'),
   priority:document.getElementById('fPriority'),
+  duration:document.getElementById('fDuration'),
   notes:  document.getElementById('fNotes')
 };
 TZ_CHOICES.forEach(t => {
@@ -917,6 +936,7 @@ function fillEditor(d){
   F.vessel.value = d.vessel || '';
   F.ref.value = d.ref || '';
   F.priority.value = d.priority || 'normal';
+  F.duration.value = String(d.durationMin || 30);
   F.notes.value = d.notes || '';
 
   if(d.y != null && d.hh != null){
@@ -990,6 +1010,7 @@ function readEditor(withAlert){
   d.vessel = F.vessel.value.trim();
   d.ref = F.ref.value.trim();
   d.priority = F.priority.value;
+  d.durationMin = parseInt(F.duration.value, 10) || 30;
   d.notes = F.notes.value.trim();
   d.errors = [];
 
@@ -1043,11 +1064,17 @@ function commitEditor(withAlert){
   if(okSaved){
     toast(it.due == null ? 'Saved with no alert' : KIND_LABEL[it.kind] + ' set · ' + fmtWhen(it));
   }
+  /* "…and schedule it in Teams" said aloud carries straight through, rather
+     than making them find the card afterwards. */
+  if(wantsTeams && it.due != null){
+    wantsTeams = false;
+    setTimeout(() => openInTeams(it), 400);
+  }
 }
 document.getElementById('editSave').addEventListener('click', () => commitEditor(true));
 document.getElementById('editNoAlert').addEventListener('click', () => commitEditor(false));
 document.getElementById('editCancel').addEventListener('click', () => {
-  closeSheet(editSheet); pendingDraft = null; editingId = null;
+  closeSheet(editSheet); pendingDraft = null; editingId = null; wantsTeams = false;
 });
 
 /* ============================== speech ============================== */
@@ -1254,7 +1281,17 @@ async function handleSpoken(said){
   if(cmd.type === 'next'){ await speakNext(); return; }
   if(cmd.type === 'today'){ await speakList('today'); return; }
   if(cmd.type === 'list'){ await speakList('all'); return; }
-  voiceConfirm(parseDraft(said, new Date(), 'local'));
+
+  /* "...in Teams" is an instruction about where the meeting goes, not part of
+     its name, so it is lifted out before the wording is parsed. */
+  wantsTeams = /\b(in|on|via|through|using)\s+teams\b|\bteams meeting\b|\bschedule .*teams\b/i.test(said);
+  const cleaned = wantsTeams
+    ? said.replace(/\b(and\s+)?(please\s+)?(schedule|set\s*up|arrange|book|put)?\s*(it\s+)?(as\s+a\s+|a\s+)?(in|on|via|through|using)?\s*teams(\s+meeting)?\b/ig, ' ')
+    : said;
+  const d = parseDraft(cleaned, new Date(), 'local');
+  d.heard = said;                       // the card still shows what was said
+  if(wantsTeams && d.kind === 'task') d.kind = 'meeting';
+  voiceConfirm(d);
 }
 
 async function speakNext(){
@@ -1415,7 +1452,12 @@ function typedNext(){
   closeSheet(typeSheet);
   /* Typed entry is the fallback for a noisy engine room or a failed mic, so it
      confirms on screen without talking. */
-  setTimeout(() => openConfirm(parseDraft(t, new Date(), 'local')), 120);
+  wantsTeams = /\bteams\b/i.test(t);
+  setTimeout(() => {
+    const d = parseDraft(t, new Date(), 'local');
+    if(wantsTeams && d.kind === 'task') d.kind = 'meeting';
+    openConfirm(d);
+  }, 120);
 }
 document.getElementById('typeNext').addEventListener('click', typedNext);
 typeInput.addEventListener('keydown', e => { if(e.key === 'Enter'){ e.preventDefault(); typedNext(); } });
@@ -1898,7 +1940,7 @@ function buildICS(list, leadMin){
     /* UTC instants preserve the exact moment. Asia/Colombo and Asia/Singapore
        observe no DST, so a recurring series keeps its local clock time too. */
     out.push('DTSTART:' + icsStamp(i.due));
-    out.push('DTEND:' + icsStamp(i.due + 30*60000));
+    out.push('DTEND:' + icsStamp(i.due + (i.durationMin || 30) * 60000));
     out.push(fold('SUMMARY:' + icsEsc(KIND_LABEL[i.kind] + ': ' + i.title)));
     const desc = [
       i.vessel ? 'Vessel/company: ' + i.vessel : '',
@@ -1928,12 +1970,41 @@ function buildICS(list, leadMin){
   out.push('END:VCALENDAR');
   return out.join('\r\n');
 }
+/* ============================== Teams & Outlook ============================== */
+/* Teams opens its own scheduling form, prefilled. Attendees are chosen there,
+   against the company directory, which this app has no access to. */
+function openInTeams(it){
+  if(it.due == null){
+    toast('Set a time first — Teams needs a start and end');
+    openEditor(it);
+    return;
+  }
+  const url = teamsMeetingUrl(it);
+  if(!url){ toast('Could not build the meeting link'); return; }
+  if(NATIVE && NATIVE.openExternal){
+    const ok = NATIVE.openExternal(url);
+    if(!ok){ toast('Teams does not seem to be installed'); return; }
+  } else {
+    window.open(url, '_blank', 'noopener');
+  }
+  toast('Opening Teams — add people, then Send');
+}
+
 function exportICS(list){
   const withTime = list.filter(i => i.due != null);
   if(!withTime.length){ toast('Nothing with a time to export'); return; }
   const lead = parseInt(document.getElementById('fAlarmLead').value, 10) || 0;
-  downloadBlob(new Blob([buildICS(withTime, lead)], {type:'text/calendar;charset=utf-8'}),
-    (withTime.length === 1 ? 'reminder' : 'watchkeeper') + '.ics');
+  const text = buildICS(withTime, lead);
+  const name = (withTime.length === 1 ? 'reminder' : 'watchkeeper') + '.ics';
+
+  if(NATIVE && NATIVE.shareCalendar){
+    /* A WebView cannot download a file, so the app hands the .ics to Android
+       and the chooser offers Outlook. */
+    const ok = NATIVE.shareCalendar(name, text);
+    toast(ok ? 'Choose Outlook to add it' : 'Could not open the calendar chooser');
+    return;
+  }
+  downloadBlob(new Blob([text], {type:'text/calendar;charset=utf-8'}), name);
   toast(withTime.length === 1
     ? 'Opening in your calendar — it will not follow later edits'
     : withTime.length + ' events sent — they will not follow later edits');

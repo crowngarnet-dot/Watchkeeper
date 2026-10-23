@@ -60,6 +60,44 @@ function epochToWall(tz, ms){
   return {y:+p.year, mo:+p.month - 1, d:+p.day, hh:(+p.hour) % 24, mi:+p.minute};
 }
 
+/* ISO 8601 with a real UTC offset, which is what the Teams scheduling link
+   requires — a bare local time there is read as the organiser's zone and the
+   meeting lands at the wrong hour for everyone else. */
+function isoWithOffset(ms, tz){
+  const w = epochToWall(tz || 'local', ms);
+  let offMin;
+  if(!tz || tz === 'local'){
+    offMin = -new Date(ms).getTimezoneOffset();
+  } else {
+    offMin = Math.round(tzOffsetMs(tz, new Date(ms)) / 60000);
+  }
+  const sign = offMin < 0 ? '-' : '+';
+  const a = Math.abs(offMin);
+  return w.y + '-' + pad2(w.mo + 1) + '-' + pad2(w.d) + 'T' +
+         pad2(w.hh) + ':' + pad2(w.mi) + ':00' +
+         sign + pad2(Math.floor(a / 60)) + ':' + pad2(a % 60);
+}
+
+/* Teams opens its scheduling form already filled in. Attendees are left to
+   the directory picker there, which knows the company address book. */
+function teamsMeetingUrl(it){
+  if(!it || it.due == null) return null;
+  const mins = it.durationMin || 30;
+  const enc = s => encodeURIComponent(String(s || ''));   // %20, never '+'
+  const body = [
+    it.notes || '',
+    it.vessel ? 'Vessel/company: ' + it.vessel : '',
+    it.ref ? 'Ref: ' + it.ref : ''
+  ].filter(Boolean).join('\n');
+  const q = [
+    'subject=' + enc(it.title),
+    'startTime=' + enc(isoWithOffset(it.due, it.tz)),
+    'endTime=' + enc(isoWithOffset(it.due + mins * 60000, it.tz))
+  ];
+  if(body) q.push('content=' + enc(body));
+  return 'https://teams.microsoft.com/l/meeting/new?' + q.join('&');
+}
+
 function tzLabel(tz){
   if(!tz || tz === 'local') return '';
   const f = TZ_CHOICES.find(t => t.id === tz);
@@ -211,7 +249,7 @@ function parseDraft(raw, now, defaultTz){
     y:null, mo:null, d:null, hh:null, mi:0,
     tz: defaultTz || 'local',
     repeat:'', anchorDay:null,
-    notes:'', vessel:'', ref:'', priority:'normal',
+    notes:'', vessel:'', ref:'', priority:'normal', durationMin:30,
     assumedDate:false, assumedTime:false, ambiguousTime:false,
     ambiguousOptions:null, errors:[], noTime:false
   };
@@ -502,6 +540,8 @@ function draftToItem(draft, existing){
   it.vessel = draft.vessel || '';
   it.ref = draft.ref || '';
   it.priority = draft.priority || 'normal';
+  it.durationMin = Number.isFinite(draft.durationMin) && draft.durationMin > 0
+    ? Math.min(1440, Math.round(draft.durationMin)) : 30;
   it.done = existing ? !!existing.done : false;
 
   if(draft.noTime || draft.y == null || draft.hh == null){
@@ -525,6 +565,7 @@ function itemToDraft(it){
     hh: w ? w.hh : null, mi: w ? w.mi : 0,
     tz: it.tz || 'local', repeat: it.repeat || '', anchorDay: it.anchorDay || null,
     notes: it.notes || '', vessel: it.vessel || '', ref: it.ref || '', priority: it.priority || 'normal',
+    durationMin: it.durationMin || 30,
     assumedDate:false, assumedTime:false, ambiguousTime:false, ambiguousOptions:null,
     errors:[], noTime: it.due == null
   };
@@ -554,6 +595,7 @@ function migrate(raw){
       vessel: typeof o.vessel === 'string' ? o.vessel : '',
       ref: typeof o.ref === 'string' ? o.ref : '',
       priority: (o.priority === 'high' || o.priority === 'low') ? o.priority : 'normal',
+      durationMin: (Number.isFinite(o.durationMin) && o.durationMin > 0) ? o.durationMin : 30,
       firedAt: Number.isFinite(o.firedAt) ? o.firedAt : (o.notified ? (o.due || Date.now()) : null),
       snoozed: !!o.snoozed,
       created: Number.isFinite(o.created) ? o.created : Date.now()
@@ -647,5 +689,5 @@ if(typeof module !== 'undefined' && module.exports){
   module.exports = {TZ_CHOICES, REPEATS, KIND_LABEL, deviceTz, tzOffsetMs, wallToEpoch, epochToWall,
     tzLabel, daysInMonth, validDate, validTime, nextOccurrence, parseDraft, cleanTitle,
     draftToItem, itemToDraft, migrate, validateBackup, detectKind, pad2, STORE_KEY, LEGACY_KEY,
-    shouldFire, applyAction};
+    shouldFire, applyAction, isoWithOffset, teamsMeetingUrl};
 }

@@ -36,6 +36,8 @@ android {
 }
 
 dependencies {
-    // Deliberately none. The app is a WebView plus platform APIs, which keeps
-    // the APK small and the build free of network surprises.
+    // The only dependency, and only for FileProvider: Android refuses to hand
+    // another app a file:// URI, so sharing the .ics with Outlook needs a
+    // content provider.
+    implementation 'androidx.core:core:1.13.1'
 }
