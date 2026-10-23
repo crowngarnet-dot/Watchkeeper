@@ -491,6 +491,9 @@ main{
 
     <div id="statusList"></div>
 
+    <button class="menu-item" id="mSilence">
+      <span>Silence everything now<small>Stops any alarm that is sounding. Reminders are kept.</small></span>
+    </button>
     <button class="menu-item" id="mBackup">
       <span>Save a backup<small>Downloads every reminder as a JSON file.</small></span>
     </button>
@@ -1656,9 +1659,14 @@ function rescheduleOne(id){
 
   if(NATIVE){
     /* Handed to AlarmManager, which fires with the phone locked. No page
-       timer is needed or wanted alongside it. */
-    const extra = [it.vessel, it.ref].filter(Boolean).join(' · ');
-    NATIVE.schedule(id, it.due, KIND_LABEL[it.kind] + ': ' + it.title, extra || it.notes || '');
+       timer is needed or wanted alongside it.
+       Only ever a future time: this runs again on every focus change, and
+       handing it a time already past is what turned one missed reminder into
+       a ring that would not stop. An overdue item simply shows on the list. */
+    if(it.due > Date.now()){
+      const extra = [it.vessel, it.ref].filter(Boolean).join(' · ');
+      NATIVE.schedule(id, it.due, KIND_LABEL[it.kind] + ': ' + it.title, extra || it.notes || '');
+    }
     return;
   }
 
@@ -1826,6 +1834,14 @@ function doBackup(){
     'watchkeeper-backup-' + stamp + '.json');
   toast('Backup saved to Downloads');
 }
+/* An escape hatch that does not depend on finding the right card first. */
+document.getElementById('mSilence').addEventListener('click', () => {
+  silence();
+  ringing = [];
+  stopAlarm();
+  closeSheet(menuSheet);
+  toast('Silenced');
+});
 document.getElementById('mBackup').addEventListener('click', doBackup);
 document.getElementById('mRestore').addEventListener('click', () => document.getElementById('restoreFile').click());
 document.getElementById('restoreFile').addEventListener('change', ev => {
