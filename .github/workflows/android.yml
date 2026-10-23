@@ -1,0 +1,84 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'index.html'
+      - 'core.js'
+      - 'voice.js'
+      - 'native.js'
+      - 'android/**'
+      - '.github/workflows/android.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Copy the web app into the Android assets
+        run: |
+          mkdir -p android/app/src/main/assets/www
+          cp index.html core.js voice.js native.js android/app/src/main/assets/www/
+          echo "Bundled:"
+          ls -la android/app/src/main/assets/www/
+
+      - name: Stamp the version from the run number
+        run: |
+          cd android
+          sed -i "s/versionCode 1/versionCode ${{ github.run_number }}/" app/build.gradle
+          sed -i "s/versionName \"1.0\"/versionName \"1.0.${{ github.run_number }}\"/" app/build.gradle
+          grep -E 'version(Code|Name)' app/build.gradle
+
+      - name: Build the debug APK
+        run: |
+          cd android
+          gradle --no-daemon assembleDebug
+
+      - name: Rename the APK
+        run: |
+          mkdir -p out
+          cp android/app/build/outputs/apk/debug/app-debug.apk \
+             out/watchkeeper-1.0.${{ github.run_number }}.apk
+          ls -la out/
+
+      - name: Upload the APK as a build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: watchkeeper-apk
+          path: out/*.apk
+          retention-days: 90
+
+      - name: Publish a release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: Watchkeeper 1.0.${{ github.run_number }}
+          body: |
+            Install on the phone: open this page in Chrome on the phone, tap
+            the .apk, and allow installation from this source when asked.
+
+            Reminders ring with the phone locked. The list stays on the phone.
+
+            Signed with the standard Android debug key, so Play Protect will
+            ask for confirmation the first time.
+          files: out/*.apk
+          generate_release_notes: false
