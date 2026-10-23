@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The lock-screen alarm. Large targets, because this is read and answered
+     at arm's length, often with one hand. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:gravity="center"
+    android:background="@color/navy"
+    android:padding="28dp">
+
+    <TextView
+        android:id="@+id/alarmKind"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="REMINDER DUE"
+        android:textColor="@color/amber"
+        android:textSize="13sp"
+        android:letterSpacing="0.22"
+        android:fontFamily="monospace"
+        android:layout_marginBottom="18dp" />
+
+    <TextView
+        android:id="@+id/alarmTitle"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Reminder"
+        android:textColor="#FFF4F1EC"
+        android:textSize="27sp"
+        android:textStyle="bold"
+        android:gravity="center"
+        android:lineSpacingMultiplier="1.15" />
+
+    <TextView
+        android:id="@+id/alarmBody"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textColor="@color/muted"
+        android:textSize="15sp"
+        android:gravity="center"
+        android:layout_marginTop="12dp"
+        android:visibility="gone" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Say \"done\" or \"snooze\""
+        android:textColor="@color/muted"
+        android:textSize="13sp"
+        android:fontFamily="monospace"
+        android:layout_marginTop="26dp" />
+
+    <Button
+        android:id="@+id/btnDone"
+        android:layout_width="match_parent"
+        android:layout_height="60dp"
+        android:text="@string/alarm_done"
+        android:textSize="17sp"
+        android:textStyle="bold"
+        android:textColor="#FF14202C"
+        android:backgroundTint="@color/amber"
+        android:layout_marginTop="30dp" />
+
+    <Button
+        android:id="@+id/btnSnooze"
+        android:layout_width="match_parent"
+        android:layout_height="56dp"
+        android:text="@string/alarm_snooze"
+        android:textSize="16sp"
+        android:textColor="#FFF4F1EC"
+        android:backgroundTint="#FF24384C"
+        android:layout_marginTop="12dp" />
+
+    <Button
+        android:id="@+id/btnOpen"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="@string/alarm_open"
+        android:textSize="14sp"
+        android:textColor="@color/muted"
+        android:background="@android:color/transparent"
+        android:layout_marginTop="10dp" />
+
+</LinearLayout>

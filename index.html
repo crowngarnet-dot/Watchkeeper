@@ -230,6 +230,7 @@ main{
   background:var(--surface); display:grid; place-items:center; color:var(--ink-2);
 }
 .typebtn svg{width:19px;height:19px}
+.typebtn.on{background:var(--amber); color:#14202c; border-color:transparent}
 .hint{font-family:var(--font-mono); font-size:10.5px; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-3); text-align:center}
 .langbtn{background:none;border:none;padding:0 2px;font:inherit;color:var(--amber);font-weight:600;text-decoration:underline;text-underline-offset:3px}
 
@@ -335,6 +336,9 @@ main{
     <h1>Watchkeeper</h1>
     <div class="sub" id="subline">Voice reminders</div>
   </div>
+  <button class="hdr-btn" id="bellBtn" aria-label="Alerts and test alarm">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
+  </button>
   <button class="hdr-btn" id="searchBtn" aria-label="Search reminders">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
   </button>
@@ -374,8 +378,8 @@ main{
     <button class="mic" id="micBtn" aria-label="Speak a reminder">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/></svg>
     </button>
-    <button class="typebtn" id="bellBtn" aria-label="Alerts and test alarm">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
+    <button class="typebtn" id="handsBtn" aria-label="Hands-free listening" aria-pressed="false">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 18 0"/><path d="M3 12v3a2 2 0 0 0 2 2h1v-5H5a2 2 0 0 0-2 2Z"/><path d="M21 12v3a2 2 0 0 1-2 2h-1v-5h1a2 2 0 0 1 2 2Z"/><path d="M18 17v1a3 3 0 0 1-3 3h-3"/></svg>
     </button>
   </div>
   <div class="hint"><span id="hint">Tap mic and speak</span> · <button class="langbtn" id="langBtn" aria-label="Change speech recognition accent">en-SG</button></div>
@@ -497,6 +501,13 @@ main{
       <span>Send open reminders to calendar<small>One-way copy. Later changes here will not follow.</small></span>
     </button>
     <div class="fld">
+      <label for="fSpeak">Spoken replies</label>
+      <select id="fSpeak">
+        <option value="on">On — reads reminders back and listens</option>
+        <option value="off">Off — screen and buttons only</option>
+      </select>
+    </div>
+    <div class="fld">
       <label for="fAlarmLead">Calendar alert</label>
       <select id="fAlarmLead">
         <option value="0">At the due time</option>
@@ -537,6 +548,8 @@ main{
 <div class="toast" id="toast" role="status"><span id="toastText"></span><button id="toastAct" hidden>Undo</button></div>
 
 <script src="core.js"></script>
+<script src="voice.js"></script>
+<script src="native.js"></script>
 <script>
 'use strict';
 
@@ -1039,7 +1052,80 @@ const micBtn = document.getElementById('micBtn');
 const hint = document.getElementById('hint');
 const transcriptEl = document.getElementById('transcript');
 const SRC = window.SpeechRecognition || window.webkitSpeechRecognition;
+const speaker = makeSpeaker();
+
+/* One recogniser, driven as a state machine. Only one listener can be active
+   at a time, so every caller goes through listenOnce(). */
 let rec = null, listening = false, finalText = '';
+let micMode = 'idle';        // idle | command | reply
+let listenResolve = null, listenTimer = null;
+let handsFree = false, tappedMic = false, speaking = false;
+let speakEnabled = true;
+try{ speakEnabled = localStorage.getItem('watchkeeper.speak') !== 'off'; }catch(e){}
+
+/* Inside the Android app the platform engines are used instead of the
+   WebView's, which has no speech recognition and unreliable synthesis. */
+const NATIVE = (window.Native && window.Native.available) ? window.Native : null;
+
+async function speak(text){
+  if(!speakEnabled) return false;
+  if(!NATIVE && !speaker.supported) return false;
+  stopListening();
+  speaking = true;
+  showSpeaking(text);
+  const r = NATIVE ? await NATIVE.say(text) : await speaker.say(text, {rate:1.03});
+  speaking = false;
+  return r;
+}
+function showSpeaking(text){
+  transcriptEl.classList.add('on');
+  transcriptEl.innerHTML = '<div class="parsed">Watchkeeper says</div><div class="live">' + esc(text) + '</div>';
+}
+function stopListening(){
+  if(listenTimer){ clearTimeout(listenTimer); listenTimer = null; }
+  if(rec && listening){ try{ rec.abort(); }catch(e){} }
+  if(NATIVE) NATIVE.stopListening();
+  listening = false;
+  micBtn.classList.remove('listening');
+}
+
+/* Listen for a single phrase. Resolves with '' on silence or error so every
+   caller can simply branch on an empty string. */
+function listenOnce(ms, label){
+  if(NATIVE){
+    stopListening();
+    micBtn.classList.add('listening');
+    hint.textContent = label || 'Listening…';
+    showTranscript('', 'listening');
+    return NATIVE.listen(ms || 7000).then(r => {
+      micBtn.classList.remove('listening');
+      return (r.text || '').trim();
+    });
+  }
+  if(!rec) return Promise.resolve('');
+  stopListening();
+  return new Promise(resolve => {
+    let settled = false;
+    const done = v => {
+      if(settled) return;
+      settled = true;
+      if(listenTimer){ clearTimeout(listenTimer); listenTimer = null; }
+      listenResolve = null;
+      micBtn.classList.remove('listening');
+      resolve((v || '').trim());
+    };
+    listenResolve = done;
+    micMode = 'reply';
+    finalText = '';
+    hint.textContent = label || 'Listening…';
+    try{ rec.start(); }
+    catch(e){
+      try{ rec.abort(); }catch(_){}
+      setTimeout(() => { try{ rec.start(); }catch(__){ done(''); } }, 220);
+    }
+    listenTimer = setTimeout(() => { try{ rec.stop(); }catch(e){} done(finalText); }, ms || 7000);
+  });
+}
 
 const LANGS = ['en-SG','en-IN','en-GB','en-US','en-AU'];
 const langBtn = document.getElementById('langBtn');
@@ -1050,6 +1136,7 @@ langBtn.addEventListener('click', () => {
   lang = LANGS[(LANGS.indexOf(lang) + 1) % LANGS.length];
   langBtn.textContent = lang;
   if(rec) rec.lang = lang;
+  speaker.setLang(lang);
   try{ localStorage.setItem('watchkeeper.lang', lang); }catch(e){}
   toast('Recognition set to ' + lang);
 });
@@ -1061,17 +1148,30 @@ function showTranscript(live, parsed){
 }
 function hideTranscript(){ transcriptEl.classList.remove('on'); transcriptEl.innerHTML = ''; }
 
-if(!SRC){
+if(NATIVE){
+  /* The app route: one tap, the platform recogniser, then the same handler. */
+  micBtn.addEventListener('click', async () => {
+    speaker.cancel(); NATIVE.stopSpeaking(); speaking = false;
+    if(listening){ NATIVE.stopListening(); listening = false; micBtn.classList.remove('listening'); return; }
+    listening = true;
+    const said = await listenOnce(9000, 'Listening… speak now');
+    listening = false;
+    hideTranscript();
+    hint.textContent = 'Tap mic and speak';
+    if(said) handleSpoken(said);
+    else hint.textContent = 'Did not catch that';
+  });
+} else if(!SRC){
   hint.textContent = 'Voice unavailable here — use the pencil';
   micBtn.disabled = true;
 } else {
   rec = new SRC();
   rec.lang = lang; rec.continuous = false; rec.interimResults = true; rec.maxAlternatives = 1;
+
   rec.onstart = () => {
     listening = true; finalText = '';
     micBtn.classList.add('listening');
-    hint.textContent = 'Listening… tap to stop';
-    showTranscript('', '');
+    if(micMode === 'command'){ hint.textContent = 'Listening… tap to stop'; showTranscript('', ''); }
   };
   rec.onresult = ev => {
     let interim = '';
@@ -1081,34 +1181,223 @@ if(!SRC){
       else interim += t;
     }
     const whole = (finalText + interim).trim();
-    const p = parseDraft(whole, new Date(), 'local');
-    const line = p.errors.length ? p.errors[0]
-      : p.noTime ? 'no time heard yet'
-      : KIND_LABEL[p.kind] + ' → ' + pad2(p.d) + '/' + pad2(p.mo+1) + ' ' + pad2(p.hh) + ':' + pad2(p.mi);
-    showTranscript(whole, line);
+    if(micMode === 'command'){
+      const p = parseDraft(whole, new Date(), 'local');
+      const line = p.errors.length ? p.errors[0]
+        : p.noTime ? 'no time heard yet'
+        : KIND_LABEL[p.kind] + ' → ' + pad2(p.d) + '/' + pad2(p.mo+1) + ' ' + pad2(p.hh) + ':' + pad2(p.mi);
+      showTranscript(whole, line);
+    } else {
+      showTranscript(whole, 'listening for your answer');
+    }
   };
   rec.onerror = ev => {
     listening = false; micBtn.classList.remove('listening');
     const e = ev.error;
-    hint.textContent = e === 'not-allowed' ? 'Mic blocked — allow it in site settings'
-      : e === 'no-speech' ? 'Did not catch that — try again'
-      : e === 'network' ? 'Speech needs a connection'
-      : 'Mic error: ' + e;
-    setTimeout(hideTranscript, 2200);
+    if(e === 'not-allowed'){
+      hint.textContent = 'Mic blocked — allow it in site settings';
+      handsFree = false; paintHandsFree();
+    } else if(e === 'no-speech'){
+      hint.textContent = 'Did not catch that';
+    } else if(e === 'network'){
+      hint.textContent = 'Speech needs a connection';
+    } else if(e !== 'aborted'){
+      hint.textContent = 'Mic error: ' + e;
+    }
+    if(listenResolve) listenResolve(finalText);
   };
   rec.onend = () => {
     listening = false; micBtn.classList.remove('listening');
-    hint.textContent = 'Tap mic and speak';
     const said = finalText.trim();
+    if(listenResolve){ listenResolve(said); return; }      // a reply handler owns this
+    hint.textContent = handsFree ? 'Hands-free — say "Watchkeeper…"' : 'Tap mic and speak';
     hideTranscript();
-    if(said) openConfirm(parseDraft(said, new Date(), 'local'));
+    const wasCommand = micMode === 'command';
+    micMode = 'idle';
+    if(wasCommand && said){
+      if(handsFree && !tappedMic){
+        /* Hands-free only acts on speech addressed to the app, so ordinary
+           conversation in the office is ignored. */
+        if(WAKE.test(said)) handleSpoken(said.replace(WAKE, '').replace(/^[\s,.:;]+/, ''));
+      } else {
+        handleSpoken(said);
+      }
+    }
+    tappedMic = false;
+    if(handsFree && !openSheet) setTimeout(startHandsFreeListen, 600);
   };
+
   micBtn.addEventListener('click', () => {
     unlockAudio();
+    speaker.cancel(); speaking = false;
     if(listening){ try{ rec.stop(); }catch(e){} return; }
-    try{ rec.start(); }catch(e){ try{ rec.stop(); }catch(_){} }
+    micMode = 'command'; tappedMic = true;
+    try{ rec.start(); }catch(e){ try{ rec.abort(); }catch(_){} }
   });
 }
+
+/* ============================== spoken commands ============================== */
+/* Everything said at the mic lands here: a query, a control word, or a new
+   reminder. */
+async function handleSpoken(said){
+  const cmd = parseCommand(said);
+  if(cmd.type === 'stop'){ speaker.cancel(); stopAlarmSound(); return; }
+  if(cmd.type === 'undo'){ undoDelete(); await speak('Put back.'); return; }
+  if(cmd.type === 'help'){
+    await speak('Say a reminder, like: follow up with the yard tomorrow at ten. ' +
+      'Then say save, or say a correction. You can also ask what is next, or say done or snooze when an alarm rings.');
+    return;
+  }
+  if(cmd.type === 'next'){ await speakNext(); return; }
+  if(cmd.type === 'today'){ await speakList('today'); return; }
+  if(cmd.type === 'list'){ await speakList('all'); return; }
+  voiceConfirm(parseDraft(said, new Date(), 'local'));
+}
+
+async function speakNext(){
+  const n = items.filter(i => !i.done && i.due != null).sort((a,b) => a.due - b.due)[0];
+  if(!n){ await speak('Nothing scheduled.'); return; }
+  const w = epochToWall('local', n.due);
+  await speak('Next: ' + n.title + ', ' + spokenDay(w.y, w.mo, w.d) + ' at ' + spokenTime(w.hh, w.mi) + '.');
+}
+async function speakList(scope){
+  const now = Date.now();
+  const nw = epochToWall('local', now);
+  const endToday = new Date(nw.y, nw.mo, nw.d + 1).getTime();
+  let list = items.filter(i => !i.done && i.due != null);
+  if(scope === 'today') list = list.filter(i => i.due < endToday);
+  list.sort((a,b) => a.due - b.due);
+  if(!list.length){ await speak(scope === 'today' ? 'Nothing left today.' : 'Nothing scheduled.'); return; }
+  const head = list.length === 1 ? 'One reminder. ' : list.length + ' reminders. ';
+  const body = list.slice(0, 6).map(i => {
+    const w = epochToWall('local', i.due);
+    return i.title + ', ' + spokenDay(w.y, w.mo, w.d) + ' at ' + spokenTime(w.hh, w.mi);
+  }).join('. ');
+  await speak(head + body + '.');
+}
+
+/* ============================== spoken confirmation ============================== */
+/* Reads the reminder back, then listens. "Yes" saves, "no" discards, and
+   anything carrying a new time is treated as a correction. */
+async function voiceConfirm(draft, round){
+  round = round || 0;
+  openConfirm(draft);                       // the dialog is the visual record
+  /* Inside the app there is no web recogniser — listening goes through the
+     bridge instead, so NATIVE counts as voice being available. */
+  if(!speakEnabled || (!rec && !NATIVE) || round > 3){ return; }
+
+  await speak(draftSentence(draft, new Date()) + ' ' + confirmPrompt(draft));
+  if(!editSheet.classList.contains('on')) return;   // user closed it meanwhile
+
+  const reply = await listenOnce(7000, 'Say yes, no, or a correction');
+  if(!editSheet.classList.contains('on')) return;
+
+  if(draft.ambiguousTime){
+    const ap = parseAmPmReply(reply);
+    if(ap){
+      const pick = draft.ambiguousOptions.find(o => (ap === 'am') === (o.hh < 12));
+      if(pick){
+        draft.hh = pick.hh; draft.mi = pick.mi;
+        draft.ambiguousTime = false; draft.ambiguousOptions = null;
+        fillEditor(draft);
+        return voiceConfirm(draft, round + 1);
+      }
+    }
+  }
+
+  const r = parseConfirmReply(reply);
+  if(r.type === 'yes'){
+    commitEditor(!(draft.noTime && !F.time.value));
+    await speak('Saved.');
+    return;
+  }
+  if(r.type === 'no'){
+    closeSheet(editSheet); pendingDraft = null; editingId = null;
+    await speak('Cancelled.');
+    return;
+  }
+  if(r.type === 'repeat') return voiceConfirm(draft, round + 1);
+  if(r.type === 'change'){
+    const fix = parseDraft(r.text, new Date(), draft.tz);
+    if(fix.y != null){ draft.y = fix.y; draft.mo = fix.mo; draft.d = fix.d; draft.assumedDate = false; }
+    if(fix.hh != null){
+      draft.hh = fix.hh; draft.mi = fix.mi;
+      draft.assumedTime = false;
+      draft.ambiguousTime = fix.ambiguousTime;
+      draft.ambiguousOptions = fix.ambiguousOptions;
+    }
+    if(fix.repeat) draft.repeat = fix.repeat;
+    draft.noTime = (draft.hh == null);
+    draft.errors = [];
+    fillEditor(draft);
+    return voiceConfirm(draft, round + 1);
+  }
+  /* Nothing usable heard — leave the dialog open and let the buttons finish it. */
+  if(round < 2 && reply) return voiceConfirm(draft, round + 1);
+  if(!reply) await speak('I did not hear you. Use the buttons, or tap the mic again.');
+}
+
+/* ============================== hands-free ============================== */
+const WAKE = /\b(watch\s*keeper|watchkeeper|watch keeper|hey keeper|watchkipper|watch kipper)\b/i;
+let nativeLoopRunning = false;
+function startHandsFreeListen(){
+  if(!handsFree || listening || openSheet || speaking) return;
+  if(NATIVE){ startNativeHandsFree(); return; }
+  if(!rec) return;
+  micMode = 'command';
+  finalText = '';
+  try{ rec.start(); }catch(e){ /* already running */ }
+}
+
+/* The platform recogniser returns one phrase at a time, so hands-free is a
+   loop rather than a continuous stream. It pauses whenever a dialog is open
+   or the app is speaking, so it never hears itself. */
+async function startNativeHandsFree(){
+  if(nativeLoopRunning) return;
+  nativeLoopRunning = true;
+  try{
+    while(handsFree && NATIVE){
+      if(openSheet || speaking || alarmEl.classList.contains('on')){
+        await new Promise(r => setTimeout(r, 700));
+        continue;
+      }
+      micBtn.classList.add('listening');
+      const r = await NATIVE.listen(8000);
+      micBtn.classList.remove('listening');
+      if(!handsFree) break;
+      const said = (r.text || '').trim();
+      if(said && WAKE.test(said)){
+        await handleSpoken(said.replace(WAKE, '').replace(/^[\s,.:;]+/, ''));
+      }
+      await new Promise(r2 => setTimeout(r2, 400));
+    }
+  } finally {
+    nativeLoopRunning = false;
+    micBtn.classList.remove('listening');
+  }
+}
+function paintHandsFree(){
+  const b = document.getElementById('handsBtn');
+  if(!b) return;
+  b.setAttribute('aria-pressed', String(handsFree));
+  b.classList.toggle('on', handsFree);
+  hint.textContent = handsFree ? 'Hands-free — say "Watchkeeper…"' : 'Tap mic and speak';
+}
+document.getElementById('handsBtn').addEventListener('click', async () => {
+  unlockAudio();
+  if(!rec && !NATIVE){ toast('Voice is not available in this browser'); return; }
+  handsFree = !handsFree;
+  try{ localStorage.setItem('watchkeeper.handsfree', handsFree ? 'on' : 'off'); }catch(e){}
+  paintHandsFree();
+  if(handsFree){
+    await speak('Hands-free on. Say Watchkeeper, then your reminder.');
+    startHandsFreeListen();
+  } else {
+    stopListening();
+    toast('Hands-free off');
+  }
+});
+try{ handsFree = localStorage.getItem('watchkeeper.handsfree') === 'on'; }catch(e){}
 
 /* ============================== typed entry ============================== */
 const typeSheet = document.getElementById('typeSheet');
@@ -1121,6 +1410,8 @@ function typedNext(){
   const t = typeInput.value.trim();
   if(!t) return;
   closeSheet(typeSheet);
+  /* Typed entry is the fallback for a noisy engine room or a failed mic, so it
+     confirms on screen without talking. */
   setTimeout(() => openConfirm(parseDraft(t, new Date(), 'local')), 120);
 }
 document.getElementById('typeNext').addEventListener('click', typedNext);
@@ -1128,9 +1419,11 @@ typeInput.addEventListener('keydown', e => { if(e.key === 'Enter'){ e.preventDef
 
 /* ============================== service worker ============================== */
 /* Android Chrome refuses `new Notification()`; notifications must be shown by a
-   service worker registration. This also lets the app open offline. */
-let swReg = null, swState = 'unsupported';
-if('serviceWorker' in navigator){
+   service worker registration. This also lets the app open offline.
+   The native app has no use for it — alarms and notifications are the
+   platform's there — so it is skipped entirely. */
+let swReg = null, swState = NATIVE ? 'native' : 'unsupported';
+if(!NATIVE && 'serviceWorker' in navigator){
   swState = 'registering';
   navigator.serviceWorker.register('sw.js')
     .then(r => { swReg = r; swState = 'registered'; return navigator.serviceWorker.ready; })
@@ -1232,6 +1525,56 @@ function showAlarm(it){
   alarmEl.classList.add('on');
   startAlarm();
   try{ if(navigator.wakeLock) navigator.wakeLock.request('screen').catch(()=>{}); }catch(e){}
+  alarmVoiceRound = 0;
+  runAlarmVoice();
+}
+
+/* The alarm announces itself and then listens, so it can be dealt with
+   without touching the phone. */
+let alarmVoiceRound = 0, alarmVoiceBusy = false;
+async function runAlarmVoice(){
+  if(alarmVoiceBusy) return;
+  const it = ringing[0];
+  if(!it || !speakEnabled || (!rec && !NATIVE)){ return; }
+  alarmVoiceBusy = true;
+  try{
+    while(ringing[0] && ringing[0].id === it.id && alarmVoiceRound < 4){
+      stopAlarmSound();
+      const line = alarmVoiceRound === 0
+        ? (KIND_LABEL[it.kind] + ' due. ' + it.title + '. Say done, or say snooze.')
+        : 'Still waiting. Say done, or say snooze.';
+      await speak(line);
+      if(!ringing[0] || ringing[0].id !== it.id) break;
+      const reply = await listenOnce(6500, 'Say "done" or "snooze"');
+      if(!ringing[0] || ringing[0].id !== it.id) break;
+      const r = parseAlarmReply(reply);
+      if(r.type === 'done'){
+        if(it.id !== 'test'){
+          const res = mutate(it.id, 'complete');
+          await speak(res.reason === 'rescheduled'
+            ? 'Done. Next one ' + fmtWhen(items.find(x => x.id === it.id)) + '.'
+            : 'Done.');
+        } else await speak('Done.');
+        dismissTop();
+        break;
+      }
+      if(r.type === 'snooze'){
+        if(it.id !== 'test'){
+          mutate(it.id, 'snooze', {minutes: r.minutes});
+          await speak('Snoozed. Back ' + fmtWhen(items.find(x => x.id === it.id)) + '.');
+        } else await speak('Snoozed.');
+        dismissTop();
+        break;
+      }
+      alarmVoiceRound++;
+      startAlarm();
+    }
+  } finally {
+    alarmVoiceBusy = false;
+    /* Anything still ringing keeps its tone going for the buttons. */
+    if(ringing.length && alarmEl.classList.contains('on') && !alarmTimer) startAlarm();
+    if(ringing.length && alarmVoiceRound < 4){ alarmVoiceRound = 0; }
+  }
 }
 function paintAlarm(){
   const it = ringing[0];
@@ -1245,8 +1588,15 @@ function paintAlarm(){
 }
 function dismissTop(){
   ringing.shift();
-  if(ringing.length){ paintAlarm(); startAlarm(); }
-  else stopAlarm();
+  if(ringing.length){
+    paintAlarm(); startAlarm();
+    alarmVoiceRound = 0;
+    setTimeout(runAlarmVoice, 400);          // announce the next one in the queue
+  } else {
+    stopAlarm();
+    stopListening();
+    if(handsFree) setTimeout(startHandsFreeListen, 800);
+  }
 }
 document.getElementById('alarmDone').addEventListener('click', () => {
   const it = ringing[0];
@@ -1277,11 +1627,21 @@ const timers = new Map();
 function clearTimer(id){
   const t = timers.get(id);
   if(t){ clearTimeout(t); timers.delete(id); }
+  if(NATIVE) NATIVE.cancel(id);
 }
 function rescheduleOne(id){
   clearTimer(id);
   const it = items.find(x => x.id === id);
   if(!it || it.done || it.due == null) return;
+
+  if(NATIVE){
+    /* Handed to AlarmManager, which fires with the phone locked. No page
+       timer is needed or wanted alongside it. */
+    const extra = [it.vessel, it.ref].filter(Boolean).join(' · ');
+    NATIVE.schedule(id, it.due, KIND_LABEL[it.kind] + ': ' + it.title, extra || it.notes || '');
+    return;
+  }
+
   const ms = it.due - Date.now();
   if(ms <= 0 || ms > 86400000) return;      // sweep picks up anything outside this window
   timers.set(id, setTimeout(() => { timers.delete(id); tryFire(id); }, ms));
@@ -1305,6 +1665,7 @@ function tryFire(id){
 }
 
 async function notify(it){
+  if(NATIVE) return;          // the platform alarm already posted its own
   if(!('Notification' in window) || Notification.permission !== 'granted') return;
   const opts = {
     body: [it.title, [it.vessel, it.ref].filter(Boolean).join(' · ')].filter(Boolean).join('\n'),
@@ -1373,22 +1734,46 @@ function paintStatus(){
     n === 'granted' ? 'Alerts can appear in the notification shade.'
       : n === 'denied' ? 'Chrome ⋮ → Site settings → Notifications → Allow.'
       : 'Tap the bell beside the mic to turn them on.');
-  html += row(
-    swState === 'ready' ? 'good' : swState === 'failed' ? 'bad' : 'warn',
-    'Background worker: ' + swState,
-    swState === 'ready' ? 'Required on Android for notifications to appear at all.'
-      : swState === 'failed' ? 'Notifications will not show. Check the site is served over https.'
-      : 'Starting up.');
+  if(NATIVE){
+    html += row(NATIVE.exactAlarms ? 'good' : 'warn',
+      'Locked-phone alarms: ' + (NATIVE.exactAlarms ? 'on' : 'limited'),
+      NATIVE.exactAlarms
+        ? 'Reminders ring with the phone locked, asleep, or in your pocket.'
+        : 'Exact alarms are not permitted. Android settings → Apps → Watchkeeper → Alarms & reminders.');
+  } else {
+    html += row(
+      swState === 'ready' ? 'good' : swState === 'failed' ? 'bad' : 'warn',
+      'Background worker: ' + swState,
+      swState === 'ready' ? 'Required on Android for notifications to appear at all.'
+        : swState === 'failed' ? 'Notifications will not show. Check the site is served over https.'
+        : 'Starting up.');
+  }
   html += row(secure ? 'good' : 'bad', 'Secure connection: ' + (secure ? 'yes' : 'no'),
     secure ? 'Microphone and notifications are permitted.' : 'Microphone and notifications need https. Open the hosted address, not a local file.');
   html += row(saveBroken ? 'bad' : 'good', 'Storage: ' + (saveBroken ? 'failing' : 'working'),
     saveBroken ? 'Reminders are not being saved. Export a backup now.' : items.length + ' reminders saved on this device only.');
   html += row(actx ? 'good' : 'warn', 'Alarm sound: ' + (actx ? 'ready' : 'not unlocked'),
     actx ? 'The alarm can play a tone.' : 'Tap anywhere once to allow sound.');
+  const voiceIn = NATIVE ? NATIVE.speechAvailable : !!rec;
+  html += row(
+    !voiceIn ? 'bad' : handsFree ? 'good' : 'warn',
+    'Voice input: ' + (!voiceIn ? 'not supported' : handsFree ? 'hands-free' : 'tap to talk'),
+    !voiceIn ? (NATIVE ? 'No speech recogniser on this phone.' : 'This browser has no speech recognition.')
+      : handsFree ? 'Listening for "Watchkeeper" while the app is open and on screen.'
+      : 'Tap the headset button beside the mic for hands-free.');
+  const canSpeak = NATIVE ? true : speaker.supported;
+  html += row(canSpeak && speakEnabled ? 'good' : 'warn',
+    'Spoken replies: ' + (!canSpeak ? 'not supported' : speakEnabled ? 'on' : 'off'),
+    canSpeak ? 'Reminders are read back before saving and when they ring.'
+             : 'This browser cannot speak.');
   document.getElementById('statusList').innerHTML = html;
 
-  document.getElementById('bgNote').innerHTML =
-    '<strong>What this app can and cannot do.</strong> Alerts fire reliably while Watchkeeper is open ' +
+  document.getElementById('bgNote').innerHTML = NATIVE
+    ? '<strong>This is the Android app.</strong> Reminders are handed to the system alarm clock, ' +
+      'so they ring with the phone locked, asleep or in your pocket — the same way the clock app does. ' +
+      'They survive a restart. Nothing is sent anywhere: the list stays on this phone. ' +
+      'Speech uses the phone’s own recogniser, which works offline once the language pack is installed.'
+    : '<strong>What this app can and cannot do.</strong> Alerts fire reliably while Watchkeeper is open ' +
     'or recently in the background. Once Android suspends or closes it, the page stops running and ' +
     'no alarm can fire — anything missed is announced the next time you open it. ' +
     'This is a limit of web apps, not a setting. For reminders you cannot miss, use ' +
@@ -1396,6 +1781,13 @@ function paintStatus(){
     'Truly reliable background alerts would need a push server (a small always-on backend sending ' +
     'Web Push) or a native Android app. Neither is installed here, and nothing in this app pretends otherwise.';
 }
+const speakSel = document.getElementById('fSpeak');
+speakSel.value = speakEnabled ? 'on' : 'off';
+speakSel.addEventListener('change', () => {
+  speakEnabled = speakSel.value === 'on';
+  try{ localStorage.setItem('watchkeeper.speak', speakEnabled ? 'on' : 'off'); }catch(e){}
+  if(!speakEnabled) speaker.cancel();
+});
 document.getElementById('menuBtn').addEventListener('click', () => { paintStatus(); showSheet(menuSheet); });
 document.getElementById('menuClose').addEventListener('click', () => closeSheet(menuSheet));
 
@@ -1539,10 +1931,18 @@ load();
 render();
 rescheduleAll();
 paintStatusDot();
+paintHandsFree();
+speaker.setLang(lang);
 consumeHashAction();
 sweep();
-if(!window.isSecureContext){
+if(handsFree) setTimeout(startHandsFreeListen, 1200);
+if(!NATIVE && !window.isSecureContext){
   showBanner('Opened without https — microphone and alerts will not work.', '', null);
+}
+if(NATIVE && !NATIVE.exactAlarms){
+  showBanner('Exact alarms are switched off, so reminders may be late.', 'How to fix', () => {
+    paintStatus(); showSheet(menuSheet);
+  });
 }
 </script>
 </body>

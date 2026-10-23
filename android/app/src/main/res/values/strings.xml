@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Watchkeeper</string>
+    <string name="alarm_done">Done</string>
+    <string name="alarm_snooze">Snooze 10 min</string>
+    <string name="alarm_open">Open app</string>
+</resources>

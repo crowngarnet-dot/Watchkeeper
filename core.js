@@ -139,6 +139,54 @@ const NUMWORDS = {a:1,an:1,one:1,two:2,three:3,four:4,five:5,six:6,seven:7,eight
 
 const KIND_LABEL = {meeting:'Meeting', followup:'Follow-up', call:'Call', task:'Task'};
 
+/* Speech recognisers return numbers as words at least as often as digits —
+   "eleven thirty", "half past four", "forty five minutes". Everything below
+   turns those into the digits the rest of the parser expects. */
+const HOURWORD = {one:1,two:2,three:3,four:4,five:5,six:6,seven:7,eight:8,nine:9,ten:10,
+  eleven:11,twelve:12,thirteen:13,fourteen:14,fifteen:15,sixteen:16,seventeen:17,
+  eighteen:18,nineteen:19,twenty:20,'twenty one':21,'twenty two':22,'twenty three':23};
+const MINWORD = {"o'clock":0,oclock:0,'o clock':0,five:5,ten:10,fifteen:15,twenty:20,
+  'twenty five':25,thirty:30,'thirty five':35,forty:40,'forty five':45,fifty:50,'fifty five':55};
+const UNIT_AFTER = '(?!\\s*(?:minutes?|mins?|hours?|hrs?|days?|weeks?|months?|o\'?clock))';
+
+/* Case is preserved so vessel and company names survive ("CMA CGM"). */
+function normalizeSpokenNumbers(text){
+  let s = ' ' + String(text) + ' ';
+  const hours = Object.keys(HOURWORD).sort((a,b) => b.length - a.length).join('|');
+  const mins  = Object.keys(MINWORD).filter(k => !/clock/.test(k)).sort((a,b) => b.length - a.length).join('|');
+  const low = k => String(k).toLowerCase();
+
+  s = s.replace(new RegExp('\\bhalf\\s+past\\s+(' + hours + ')\\b','gi'),
+    (_, h) => ' ' + HOURWORD[low(h)] + ':30 ');
+  s = s.replace(new RegExp('\\b(?:a\\s+)?quarter\\s+past\\s+(' + hours + ')\\b','gi'),
+    (_, h) => ' ' + HOURWORD[low(h)] + ':15 ');
+  s = s.replace(new RegExp('\\b(?:a\\s+)?quarter\\s+to\\s+(' + hours + ')\\b','gi'),
+    (_, h) => ' ' + ((HOURWORD[low(h)] + 23) % 24) + ':45 ');
+
+  // "eleven thirty" -> 11:30, but never "two hours" or "forty five minutes"
+  s = s.replace(new RegExp('\\b(' + hours + ')\\s+(' + mins + ')\\b' + UNIT_AFTER,'gi'),
+    (_, h, m) => ' ' + HOURWORD[low(h)] + ':' + pad2(MINWORD[low(m)]) + ' ');
+
+  s = s.replace(new RegExp("\\b(" + hours + ")\\s+o'?\\s?clock\\b",'gi'),
+    (_, h) => ' ' + HOURWORD[low(h)] + ' ');
+
+  /* Compound tens BEFORE single words, or "forty five minutes" is torn into
+     "forty" and "5" and the duration is lost. */
+  s = s.replace(/\btwenty[\s-]five\b/gi, ' 25 ');
+  s = s.replace(/\bthirty[\s-]five\b/gi, ' 35 ');
+  s = s.replace(/\bforty[\s-]five\b/gi, ' 45 ');
+  s = s.replace(/\bfifty[\s-]five\b/gi, ' 55 ');
+  s = s.replace(/\bthirty\b/gi, ' 30 ');
+  s = s.replace(/\bforty\b/gi, ' 40 ');
+  s = s.replace(/\bfifty\b/gi, ' 50 ');
+  s = s.replace(/\bsixty\b/gi, ' 60 ');
+
+  // remaining standalone number words -> digits (also helps "in two hours")
+  s = s.replace(new RegExp('\\b(' + hours + ')\\b','gi'), (_, h) => ' ' + HOURWORD[low(h)] + ' ');
+
+  return s.replace(/\s{2,}/g,' ').trim();
+}
+
 function detectKind(t){
   const s = t.toLowerCase();
   if(/\bfollow[\s-]?up\b|\bfollowup\b|\bchase\b|\brevert\b|\bremind .* about\b/.test(s)) return 'followup';
@@ -151,7 +199,10 @@ function detectKind(t){
    the draft is always shown for confirmation first. */
 function parseDraft(raw, now, defaultTz){
   now = now || new Date();
-  const s = ' ' + String(raw).toLowerCase().replace(/[,]/g,' ') + ' ';
+  /* Date and time are read from the number-normalised text; `heard` keeps the
+     original words so the card still shows what was actually said. */
+  const text = normalizeSpokenNumbers(raw);
+  const s = ' ' + text.toLowerCase().replace(/[,]/g,' ') + ' ';
   const cuts = [];
   const mark = m => { if(m && m.index != null) cuts.push([m.index, m.index + m[0].length]); };
 
@@ -203,7 +254,7 @@ function parseDraft(raw, now, defaultTz){
     draft.tz = 'local';
     const w = epochToWall('local', t.getTime());
     Object.assign(draft, {y:w.y, mo:w.mo, d:w.d, hh:w.hh, mi:w.mi});
-    draft.title = cleanTitle(raw, cuts);
+    draft.title = cleanTitle(text, cuts);
     return draft;
   }
 
@@ -308,7 +359,20 @@ function parseDraft(raw, now, defaultTz){
     if(ap === 'pm' && hh < 12) hh += 12;
     if(ap === 'am' && hh === 12) hh = 0;
     if(!validTime(hh, mi3)) draft.errors.push(m[0].trim() + ' is not a valid time.');
-    else { draft.hh = hh; draft.mi = mi3; haveTime = true; }
+    else {
+      draft.hh = hh; draft.mi = mi3; haveTime = true;
+      /* "half past four" and "nine thirty" carry no am/pm. Spoken aloud these
+         are as ambiguous as "at 5", so offer both rather than assume. */
+      if(!ap && hh >= 1 && hh <= 12){
+        const am = (hh === 12 ? 0 : hh), pm = (hh === 12 ? 12 : hh + 12);
+        draft.hh = (hh >= 1 && hh <= 6) ? pm : (hh === 12 ? 12 : am);
+        draft.ambiguousTime = true;
+        draft.ambiguousOptions = [
+          {hh:am, mi:mi3, label:pad2(am) + ':' + pad2(mi3)},
+          {hh:pm, mi:mi3, label:pad2(pm) + ':' + pad2(mi3)}
+        ];
+      }
+    }
   }
   if(!haveTime && !draft.errors.length){
     m = s.match(/\b(\d{3,4})\s*(?:hrs|hours|h)\b/);
@@ -379,7 +443,7 @@ function parseDraft(raw, now, defaultTz){
     }
   }
 
-  draft.title = cleanTitle(raw, cuts);
+  draft.title = cleanTitle(text, cuts);
 
   if(draft.errors.length) return draft;
 

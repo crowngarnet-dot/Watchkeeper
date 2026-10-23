@@ -1,0 +1,41 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.watchkeeper'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.watchkeeper"
+        minSdk 26
+        targetSdk 34
+        versionCode 1
+        versionName "1.0"
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+        debug {
+            // Signed with the standard debug key so the APK installs by
+            // sideload without any keystore secrets in the repository.
+            applicationIdSuffix ""
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    packagingOptions {
+        resources.excludes += ['META-INF/*']
+    }
+}
+
+dependencies {
+    // Deliberately none. The app is a WebView plus platform APIs, which keeps
+    // the APK small and the build free of network surprises.
+}

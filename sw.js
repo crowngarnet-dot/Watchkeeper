@@ -10,8 +10,8 @@
    between events, so it cannot wake the phone for a reminder on its own.
    Reliable background delivery would need Web Push from a server. */
 
-const CACHE = 'watchkeeper-v3';
-const ASSETS = ['./', './index.html', './core.js'];
+const CACHE = 'watchkeeper-v4';
+const ASSETS = ['./', './index.html', './core.js', './voice.js', './native.js'];
 
 self.addEventListener('install', e => {
   self.skipWaiting();
