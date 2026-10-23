@@ -28,9 +28,14 @@ public class Ringer {
     private static Runnable autoStop;
     private static String ringingId;
 
-    private static final long MAX_RING_MS = 3 * 60 * 1000L;
+    /* A minute is long enough to notice and short enough that an alarm nobody
+       answers does not become a nuisance. */
+    private static final long MAX_RING_MS = 60 * 1000L;
 
     public static synchronized void start(Context c, String id, String title, String body) {
+        /* Already ringing for this reminder: leave the existing tone alone
+           rather than restarting it and stacking players. */
+        if (ringingId != null && ringingId.equals(id) && player != null) return;
         stop(c);
         ringingId = id;
 

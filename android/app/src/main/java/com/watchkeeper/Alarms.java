@@ -73,6 +73,13 @@ public class Alarms {
         cancelOnly(c, id);
         AlarmStore.put(c, id, at, title, body);
 
+        /* Rescheduling a ringing reminder — a snooze — silences it first. */
+        if (id.equals(Ringer.ringingId())) {
+            Ringer.stop(c);
+            NotificationManager nm = c.getSystemService(NotificationManager.class);
+            if (nm != null) nm.cancel(Math.abs(id.hashCode()));
+        }
+
         if (at <= System.currentTimeMillis()) {
             /* Already due — announce it now rather than scheduling the past. */
             AlarmReceiver.fire(c, id, title, body);
@@ -115,6 +122,9 @@ public class Alarms {
         AlarmStore.remove(c, id);
         NotificationManager nm = c.getSystemService(NotificationManager.class);
         if (nm != null) nm.cancel(Math.abs(id.hashCode()));
+        /* Cancelling a reminder that is ringing right now must silence it.
+           Without this the tone outlives the thing that caused it. */
+        if (id.equals(Ringer.ringingId())) Ringer.stop(c);
     }
 
     /** Called after a reboot, a clock change, or an app update. */

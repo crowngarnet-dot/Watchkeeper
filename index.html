@@ -1500,7 +1500,11 @@ function beep(){
   });
 }
 function buzz(){ try{ if(navigator.vibrate) navigator.vibrate([260,140,260,140,420]); }catch(e){} }
+/* Exactly one layer owns the sound. In the app that is the system ringer, so
+   the page stays silent — two alarms ringing at once is worse than none, and
+   the page cannot stop a tone it did not start. */
 function startAlarm(){
+  if(NATIVE) return;
   stopAlarmSound();
   beep(); buzz();
   let n = 0;
@@ -1512,6 +1516,7 @@ function startAlarm(){
 function stopAlarmSound(){
   if(alarmTimer){ clearInterval(alarmTimer); alarmTimer = null; }
   try{ if(navigator.vibrate) navigator.vibrate(0); }catch(e){}
+  if(NATIVE) NATIVE.stopRinging();
 }
 function stopAlarm(){ stopAlarmSound(); document.getElementById('alarm').classList.remove('on'); }
 
@@ -1536,6 +1541,9 @@ async function runAlarmVoice(){
   if(alarmVoiceBusy) return;
   const it = ringing[0];
   if(!it || !speakEnabled || (!rec && !NATIVE)){ return; }
+  /* In the app, the lock-screen alarm does its own speaking. The page only
+     takes over when it is the thing on screen, so the two never talk at once. */
+  if(NATIVE && document.visibilityState !== 'visible'){ return; }
   alarmVoiceBusy = true;
   try{
     while(ringing[0] && ringing[0].id === it.id && alarmVoiceRound < 4){
@@ -1598,7 +1606,17 @@ function dismissTop(){
     if(handsFree) setTimeout(startHandsFreeListen, 800);
   }
 }
+/* Every dismissal silences the ringer first, whichever layer is making the
+   noise, so the sound can never outlive the card. */
+function silence(){
+  stopAlarmSound();
+  if(NATIVE) NATIVE.stopRinging();
+  speaker.cancel();
+  if(NATIVE) NATIVE.stopSpeaking();
+  speaking = false;
+}
 document.getElementById('alarmDone').addEventListener('click', () => {
+  silence();
   const it = ringing[0];
   if(it && it.id !== 'test'){
     const r = mutate(it.id, 'complete');
@@ -1607,12 +1625,14 @@ document.getElementById('alarmDone').addEventListener('click', () => {
   dismissTop();
 });
 document.getElementById('alarmSnooze').addEventListener('click', () => {
+  silence();
   const it = ringing[0];
   if(it && it.id !== 'test'){ mutate(it.id, 'snooze', {minutes:10}); toast('Back in 10 minutes'); }
   dismissTop();
 });
 alarmEl.querySelectorAll('.more button').forEach(b => {
   b.addEventListener('click', () => {
+    silence();
     const it = ringing[0];
     if(it && it.id !== 'test'){
       mutate(it.id, 'snooze', {minutes: parseInt(b.dataset.sn,10)});
